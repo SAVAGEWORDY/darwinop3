@@ -22,8 +22,6 @@ class Motion:
         self.sense = Sense(self.robot)
         self._presets = presets()
         # Posture recovery settings for timed plain walking modes.
-        self._final_back_deg = 3.0
-        self._final_settle_s = 0.15
         self._ramp_start_before_end_s = 2.0
         self._ramp_steps = 4
         self._ramp_step_deg = 2.0
@@ -74,9 +72,6 @@ class Motion:
             else:
                 time.sleep(duration)
             self.stop()
-            if mode in self._ramp_modes:
-                self._apply_ankle_back_delta(self._final_back_deg)
-                time.sleep(self._final_settle_s)
 
     def go_coefs(self, coefs: WalkCoefs, duration: Optional[float] = None) -> None:
         self.robot.set_module('walking_module')
