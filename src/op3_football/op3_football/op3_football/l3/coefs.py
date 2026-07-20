@@ -83,16 +83,35 @@ def _base() -> WalkCoefs:
 def presets() -> Dict[str, WalkCoefs]:
     """Named presets used by L3.go(mode=...)."""
     base = _base()
+    walk_base = WalkCoefs(**asdict(base))
+    # Reduce forward torso lean for plain walking only (not turns/pivots).
+    walk_base.hip_pitch_offset = base.hip_pitch_offset - 5.0 * math.pi / 180.0
+    # More stable in-place rotation:
+    # - longer double support phase,
+    # - smaller yaw amplitude,
+    # - slightly lower CoM/step dynamics.
+    pivot_left = base.with_step(x=0.0, y=0.0, angle=0.13)
+    pivot_left.period_time = 0.72
+    pivot_left.dsp_ratio = 0.28
+    pivot_left.y_swap_amplitude = 0.022
+    pivot_left.z_move_amplitude = 0.050
+
+    pivot_right = base.with_step(x=0.0, y=0.0, angle=-0.13)
+    pivot_right.period_time = 0.72
+    pivot_right.dsp_ratio = 0.28
+    pivot_right.y_swap_amplitude = 0.022
+    pivot_right.z_move_amplitude = 0.050
+
     return {
         # slow confident forward (safer than soccer demo max 40mm)
-        'forward': base.with_step(x=0.020, y=0.0, angle=0.0),
-        'forward_fast': base.with_step(x=0.030, y=0.0, angle=0.0),
-        'backward': base.with_step(x=-0.015, y=0.0, angle=0.0),
-        'side_left': base.with_step(x=0.0, y=0.020, angle=0.0),
-        'side_right': base.with_step(x=0.0, y=-0.020, angle=0.0),
+        'forward': walk_base.with_step(x=0.020, y=0.0, angle=0.0),
+        'forward_fast': walk_base.with_step(x=0.030, y=0.0, angle=0.0),
+        'backward': walk_base.with_step(x=-0.015, y=0.0, angle=0.0),
+        'side_left': walk_base.with_step(x=0.0, y=0.020, angle=0.0),
+        'side_right': walk_base.with_step(x=0.0, y=-0.020, angle=0.0),
         'turn_left': base.with_step(x=0.005, y=0.0, angle=0.15),
         'turn_right': base.with_step(x=0.005, y=0.0, angle=-0.15),
-        'pivot_left': base.with_step(x=0.0, y=0.0, angle=0.20),
-        'pivot_right': base.with_step(x=0.0, y=0.0, angle=-0.20),
-        'spot': base.with_step(x=-0.003, y=0.0, angle=0.0),  # in-place like demo
+        'pivot_left': pivot_left,
+        'pivot_right': pivot_right,
+        'spot': walk_base.with_step(x=-0.003, y=0.0, angle=0.0),  # in-place like demo
     }
