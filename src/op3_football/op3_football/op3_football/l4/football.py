@@ -117,9 +117,70 @@ class Navigator:
 class Ball:
     def __init__(self, motion: Motion) -> None:
         self._motion = motion
+        self._last_seen_ts: float = 0.0
+        self._last_x: float = 0.0
+        self._last_y: float = 0.0
+        self._last_width: float = 0.0
+        self._last_confidence: float = 0.0
+        self._vision_sub = None
+        self._subscribe_football_vision()
 
     def seen(self) -> bool:
+        # Prefer fresh detections from football_vision topic.
+        if self._vision_sub is not None:
+            return (time.time() - self._last_seen_ts) <= 0.7
+        # Fallback to legacy detector if football_vision is not available.
         return self._motion.sense.ball_in_image().seen
+
+    @property
+    def x(self) -> float:
+        if self._vision_sub is not None:
+            return self._last_x
+        return float(self._motion.sense.ball_in_image().x)
+
+    @property
+    def y(self) -> float:
+        if self._vision_sub is not None:
+            return self._last_y
+        return float(self._motion.sense.ball_in_image().y)
+
+    @property
+    def width(self) -> float:
+        if self._vision_sub is not None:
+            return self._last_width
+        # Legacy radius has other meaning; keep 0 to disable distance logic there.
+        return 0.0
+
+    @property
+    def confidence(self) -> float:
+        if self._vision_sub is not None:
+            return self._last_confidence
+        return 0.0
+
+    def _subscribe_football_vision(self) -> None:
+        try:
+            from football_vision_msgs.msg import FieldObjects
+
+            def _cb(msg: FieldObjects) -> None:
+                if not msg.balls:
+                    return
+                # Pick the best candidate: higher confidence and visibly larger box.
+                best = max(msg.balls, key=lambda d: float(d.confidence) + float(d.width) * 0.25)
+                self._last_x = float(best.x)
+                self._last_y = float(best.y)
+                self._last_width = float(best.width)
+                self._last_confidence = float(best.confidence)
+                self._last_seen_ts = time.time()
+
+            node = self._motion.robot.bridge._node
+            self._vision_sub = node.create_subscription(
+                FieldObjects,
+                "/vision/field_objects",
+                _cb,
+                10,
+            )
+        except Exception:
+            self._vision_sub = None
 
 
 def go_to_goal(nav: Navigator) -> None:
@@ -139,16 +200,46 @@ def find_ball(motion: Motion) -> None:
 
 def main() -> None:
     motion = Motion()
-    nav = Navigator(motion=motion, start_x=0.0, start_y=0.0, start_heading_rad=0.0)
     ball = Ball(motion)
-    print('L4 stub running. Ctrl+C to stop.')
+    print("L4 football: turning to ball and approaching while visible. Ctrl+C to stop.")
+    # Control thresholds in normalized image coordinates.
+    center_x_tol = 0.10
+    close_ball_width = 0.20  # bbox width fraction; larger means ball is near.
+    search_direction = 1
+
     try:
         while True:
             if ball.seen():
-                go_to_goal(nav)
+                x_err = ball.x
+
+                if abs(x_err) > center_x_tol:
+                    # Note: in this project turn primitives are swapped at L3 level.
+                    # Object on the right (x>0) -> use turn_left primitive.
+                    turn_duration = 0.10 + min(0.55, abs(x_err) * 0.60)
+                    if x_err > 0.0:
+                        motion.go("turn_left", duration=turn_duration)
+                    else:
+                        motion.go("turn_right", duration=turn_duration)
+                    continue
+
+                # Ball is roughly centered horizontally: walk to it.
+                if ball.width < close_ball_width:
+                    motion.go("forward", duration=0.28)
+                else:
+                    motion.stop()
+                    time.sleep(0.12)
             else:
-                find_ball(motion)
-            time.sleep(0.1)
+                # If ball is lost, do short search turns; alternate directions.
+                if search_direction > 0:
+                    motion.go("turn_left", duration=0.25)
+                else:
+                    motion.go("turn_right", duration=0.25)
+                search_direction *= -1
+                try:
+                    motion.sense.look_at_image_point(0.0, 0.0, gain=0.2)
+                except Exception:
+                    pass
+            time.sleep(0.03)
     except KeyboardInterrupt:
         motion.estop()
         motion.robot.close()

@@ -3,10 +3,12 @@
 Controls:
 - Left stick +Y (up): walk forward
 - Left stick -Y (down): walk backward
-- R1 + Left stick +Y (up): walk forward_fast
-- L2: turn left
-- R2: turn right
+- Left stick +X (right): turn right
+- Left stick -X (left): turn left
 - Cross: kick (right leg by default)
+- L1: get-up from front (action page 81)
+- R1: get-up from back (action page 82)
+- After get-up: stand page 50
 
 Safety choices:
 - Movement is sent as short bursts (default 0.25s) to reduce fall risk.
@@ -22,16 +24,18 @@ import time
 from dataclasses import dataclass
 from typing import Dict
 
+from std_msgs.msg import Int32
+
 from op3_football.l3.motion import Motion
 
 
 @dataclass
 class ControllerMap:
     # Defaults for common Linux DualSense mapping.
+    left_x_axis: int = int(os.getenv("OP3_LX_AXIS", "0"))
     left_y_axis: int = int(os.getenv("OP3_LY_AXIS", "1"))
-    l2_axis: int = int(os.getenv("OP3_L2_AXIS", "4"))
-    r2_axis: int = int(os.getenv("OP3_R2_AXIS", "5"))
     cross_button: int = int(os.getenv("OP3_CROSS_BUTTON", "0"))
+    l1_button: int = int(os.getenv("OP3_L1_BUTTON", "4"))
     r1_button: int = int(os.getenv("OP3_R1_BUTTON", "5"))
 
 
@@ -90,46 +94,31 @@ def main() -> None:
     step_duration = float(os.getenv("OP3_TELEOP_STEP", "0.25"))
     loop_sleep = float(os.getenv("OP3_TELEOP_LOOP", "0.02"))
     stick_deadzone = float(os.getenv("OP3_TELEOP_DEADZONE", "0.25"))
-    trigger_threshold = float(os.getenv("OP3_TELEOP_TRIGGER", "0.20"))
-    trigger_margin = float(os.getenv("OP3_TELEOP_TRIGGER_MARGIN", "0.05"))
     kick_cooldown = float(os.getenv("OP3_TELEOP_KICK_COOLDOWN", "1.0"))
-
-    # Trigger neutral calibration (controllers vary by driver).
-    calib_time = 1.0
-    l2_neutral = 0.0
-    r2_neutral = 0.0
-    l2_count = 0
-    r2_count = 0
+    getup_cooldown = float(os.getenv("OP3_TELEOP_GETUP_COOLDOWN", "1.5"))
+    getup_front_page = int(os.getenv("OP3_GETUP_FRONT_PAGE", "81"))
+    getup_back_page = int(os.getenv("OP3_GETUP_BACK_PAGE", "82"))
+    stand_page = int(os.getenv("OP3_STAND_PAGE", "50"))
+    getup_wait = float(os.getenv("OP3_TELEOP_GETUP_WAIT", "4.0"))
+    stand_wait = float(os.getenv("OP3_TELEOP_STAND_WAIT", "1.2"))
 
     print("Teleop start: standing robot...")
     motion.stand()
     time.sleep(2.0)
-    print(f"Calibrating triggers for {calib_time:.1f}s. Do not press L2/R2.")
-
-    t0 = time.time()
-    while time.time() - t0 < calib_time:
-        js.poll()
-        if cmap.l2_axis in js.axes:
-            l2_neutral += js.axes[cmap.l2_axis]
-            l2_count += 1
-        if cmap.r2_axis in js.axes:
-            r2_neutral += js.axes[cmap.r2_axis]
-            r2_count += 1
-        time.sleep(0.01)
-
-    if l2_count:
-        l2_neutral /= l2_count
-    if r2_count:
-        r2_neutral /= r2_count
 
     print(
-        "Teleop ready. Controls: left stick up=forward, "
-        "down=backward, R1+up=forward_fast, L2/R2=turn left/right, cross=kick."
+        "Teleop ready. Controls: left stick up=forward, down=backward, "
+        "left/right=turn left/right, cross=kick, "
+        "L1=getup front(81), R1=getup back(82), then stand(50)."
     )
 
     last_cross = 0
+    last_l1 = 0
+    last_r1 = 0
     last_kick_time = 0.0
+    last_getup_time = 0.0
     moving_mode = "idle"
+    action_pub = motion.robot.bridge._node.create_publisher(Int32, "/robotis/action/page_num", 10)
 
     try:
         while True:
@@ -140,18 +129,16 @@ def main() -> None:
                 continue
 
             cross = js.buttons.get(cmap.cross_button, 0)
+            l1 = js.buttons.get(cmap.l1_button, 0)
             r1 = js.buttons.get(cmap.r1_button, 0)
+            lx_raw = js.axes.get(cmap.left_x_axis, 0)
             ly_raw = js.axes.get(cmap.left_y_axis, 0)
-            l2_raw = js.axes.get(cmap.l2_axis, int(l2_neutral))
-            r2_raw = js.axes.get(cmap.r2_axis, int(r2_neutral))
 
             # Axis conventions:
             # - left stick up is usually negative raw values.
+            # - left stick right is usually positive raw values.
+            lx = normalized_axis_signed(lx_raw)
             ly = normalized_axis_signed(ly_raw)
-
-            # Trigger activation relative to calibrated neutral.
-            l2_active = clamp((l2_raw - l2_neutral) / 32767.0, 0.0, 1.0)
-            r2_active = clamp((r2_raw - r2_neutral) / 32767.0, 0.0, 1.0)
 
             # Cross rising edge -> kick.
             now = time.time()
@@ -164,15 +151,50 @@ def main() -> None:
                 continue
             last_cross = cross
 
-            # Priority: turn > forward > idle
+            # L1/R1 rising edge -> get-up action pages.
+            if l1 == 1 and last_l1 == 0 and (now - last_getup_time) > getup_cooldown:
+                motion.stop()
+                motion.robot.set_module("action_module")
+                time.sleep(0.12)
+                msg = Int32()
+                msg.data = getup_front_page
+                action_pub.publish(msg)
+                last_getup_time = now
+                moving_mode = "idle"
+                last_l1 = l1
+                last_r1 = r1
+                time.sleep(getup_wait)
+                msg.data = stand_page
+                action_pub.publish(msg)
+                time.sleep(stand_wait)
+                continue
+            if r1 == 1 and last_r1 == 0 and (now - last_getup_time) > getup_cooldown:
+                motion.stop()
+                motion.robot.set_module("action_module")
+                time.sleep(0.12)
+                msg = Int32()
+                msg.data = getup_back_page
+                action_pub.publish(msg)
+                last_getup_time = now
+                moving_mode = "idle"
+                last_l1 = l1
+                last_r1 = r1
+                time.sleep(getup_wait)
+                msg.data = stand_page
+                action_pub.publish(msg)
+                time.sleep(stand_wait)
+                continue
+            last_l1 = l1
+            last_r1 = r1
+
+            # Priority: turn (left-stick X) > forward/backward > idle
             desired = "idle"
-            if (l2_active > trigger_threshold) or (r2_active > trigger_threshold):
-                if l2_active > (r2_active + trigger_margin):
-                    desired = "turn_left"
-                elif r2_active > (l2_active + trigger_margin):
-                    desired = "turn_right"
+            if lx > stick_deadzone:
+                desired = "turn_right"
+            elif lx < -stick_deadzone:
+                desired = "turn_left"
             elif ly < -stick_deadzone:
-                desired = "forward_fast" if r1 else "forward"
+                desired = "forward"
             elif ly > stick_deadzone:
                 desired = "backward"
 

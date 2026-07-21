@@ -14,10 +14,10 @@ class KickAPI:
         self._bridge = bridge
         self._joint = joint
         self._page_pub = self._bridge._node.create_publisher(Int32, "/robotis/action/page_num", 10)
-        self._right_kick_page = 121
-        self._left_kick_page = 120
+        self._right_kick_page = 52
+        self._left_kick_page = 67
         self._kick_wait_s = 2.0
-        self._post_kick_stand_page = 9
+        self._post_kick_stand_page = 50
         self._post_stand_wait_s = 1.2
 
     def right(self) -> None:

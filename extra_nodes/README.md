@@ -102,35 +102,58 @@ sudo apt install -y \
 `football_vision_msgs` (сообщения `Detection`/`FieldObjects`) собирается из этого
 же репозитория — отдельно ставить не надо.
 
-**2. Python-библиотеки для инференса** (через pip, не через rosdep):
+**2. Python-библиотеки для инференса** (через pip, не через rosdep).
+
+⚠️ **Важно про порядок и про два подводных камня** (наступали на оба —
+ставь строго в этом порядке, одной пачкой, и не ставь пакеты по одному
+позже — каждая последующая команда `pip install X` может тихо переустановить
+`numpy`/`opencv-python` и снова всё сломать):
 
 ```bash
 sudo apt install -y python3-pip
-python3 -m pip install --user --break-system-packages ultralytics
+
+# 1) torch — СРАЗУ CPU-сборкой, НЕ дефолтной (дефолт = CUDA, ~2.5 ГБ и
+#    десяток ненужных nvidia-*/cuda-*/triton пакетов; GPU у робота нет)
+python3 -m pip install --user --break-system-packages \
+  torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
+# 2) ultralytics и (опционально) openvino — одной командой
+python3 -m pip install --user --break-system-packages ultralytics openvino
+
+# 3) numpy — ПОСЛЕДНИМ шагом, жёстко <2
+python3 -m pip install --user --break-system-packages "numpy<2"
+
+# 4) opencv-python пришёл как зависимость ultralytics и требует numpy>=2 —
+#    убрать его, использовать системный cv2 (нужен для cv_bridge)
+python3 -m pip uninstall -y --break-system-packages opencv-python
 ```
 
-`ultralytics` тянет за собой: `torch`, `torchvision`, `numpy`, `opencv-python`,
-`pillow`, `pyyaml`, `matplotlib`, `scipy`, `tqdm`, `psutil`, `pandas`.
+**Почему именно так:**
+- `ultralytics` тянет `opencv-python` (pip-пакет `opencv-python>=5.0` требует
+  `numpy>=2`), но нода использует **системный** OpenCV 4.6 (`apt python3-opencv`)
+  через `cv_bridge` — если pip-шный `opencv-python` останется в
+  `~/.local/.../site-packages`, он **перекроет** системный в `sys.path`, и
+  `cv_bridge.cv2_to_imgmsg` упадёт с `KeyError`. Поэтому его всегда удаляем
+  после установки `ultralytics`.
+- Системный `scipy` (нужен другим инструментам) требует `numpy<1.28`, поэтому
+  `numpy` пинуем к `<2` (проверено: `1.26.4`) **последней командой** — если
+  запустить что-то после (`pip install openvino` и т.п.) без этого пина, numpy
+  снова уедет на 2.x и всё сломается по новой.
+- Если позже понадобится доставить ещё один pip-пакет — после этого **всегда**
+  перепроверяй:
+  ```bash
+  python3 -c "import numpy, cv2; print(numpy.__version__, cv2.__version__, cv2.__file__)"
+  ```
+  Ожидается `numpy < 2` и путь `cv2` из `/usr/lib/python3/dist-packages/...`
+  (НЕ из `~/.local/...`). Если не так — повтори шаги 3-4 выше.
 
-> На Linux `pip` по умолчанию ставит CUDA-сборку `torch` (~2.5 ГБ). Роботу с
-> Intel-процессором GPU не нужен — можно поставить лёгкую CPU-сборку и сэкономить
-> место/время:
-> ```bash
-> python3 -m pip install --user --break-system-packages \
->   torch torchvision --index-url https://download.pytorch.org/whl/cpu
-> python3 -m pip install --user --break-system-packages ultralytics
-> ```
-
-**3. (опционально) OpenVINO** — для ускорения инференса на Intel CPU:
-
-```bash
-python3 -m pip install --user --break-system-packages openvino
-```
-Затем экспортируй веса (`best.pt` → `best_openvino_model/`) и укажи путь в
-`model_path`. `ultralytics` сам подхватит OpenVINO-модель тем же API.
+Экспорт весов в OpenVINO (`best.pt` → `best_openvino_model/`) и `model_path`
+на эту папку — `ultralytics` подхватит её тем же API, дополнительно ничего
+ставить не нужно, если `openvino` уже стоит из шага 2.
 
 Сводка версий, на которых проверялось: ROS 2 Jazzy, Python 3.12,
-ultralytics ≥ 8.3, cv_bridge (jazzy), usb_cam (jazzy).
+ultralytics 8.4.x, torch 2.13 (`+cpu`), numpy 1.26.4, openvino 2026.2.1,
+cv_bridge (jazzy), usb_cam (jazzy).
 
 ### Запуск
 

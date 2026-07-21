@@ -3,9 +3,12 @@
 
 from __future__ import annotations
 
+import os
+
 from op3_football.l3.motion import Motion
 
 m: Motion | None = None
+_startup_head_tilt_deg = float(os.getenv("OP3_STARTUP_HEAD_TILT_DEG", "0.0"))
 
 
 def get_motion() -> Motion:
@@ -52,10 +55,22 @@ def close() -> None:
         m = None
 
 
+def apply_startup_offsets() -> Motion:
+    """Extra startup-only offsets for run_op3_shell.sh session."""
+    motion = get_motion()
+    try:
+        # Keep camera vertical to reduce impact risk on forward falls.
+        motion.joint.write_deg(20, _startup_head_tilt_deg)
+    except Exception:
+        pass
+    return motion
+
+
 get_motion()
+apply_startup_offsets()
 
 print("OP3 interactive shell ready.")
-print("Preloaded: m, Motion, get_motion, stand, sit, go, stop, estop, close")
+print("Preloaded: m, Motion, get_motion, stand, sit, go, stop, estop, close, apply_startup_offsets")
 print("Examples:")
 print("  m = stand()")
 print("  go('forward', duration=5.0)")

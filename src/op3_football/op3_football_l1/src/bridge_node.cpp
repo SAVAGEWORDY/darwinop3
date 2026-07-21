@@ -6,6 +6,7 @@
 #include <atomic>
 #include <cmath>
 #include <thread>
+#include <algorithm>
 
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/string.hpp>
@@ -50,6 +51,7 @@ public:
     declare_parameter<int>("auto_getup.getup_front_page", 122);
     declare_parameter<int>("auto_getup.getup_back_page", 123);
     declare_parameter<int>("auto_getup.getup_wait_ms", 4500);
+    declare_parameter<int>("auto_getup.stand_page", 50);
 
     get_parameter("auto_getup.enabled", auto_getup_enabled_);
     get_parameter("auto_getup.stand_after_getup", auto_getup_stand_after_getup_);
@@ -59,6 +61,14 @@ public:
     get_parameter("auto_getup.getup_front_page", getup_front_page_);
     get_parameter("auto_getup.getup_back_page", getup_back_page_);
     get_parameter("auto_getup.getup_wait_ms", getup_wait_ms_);
+
+    declare_parameter<bool>("camera_level.enabled", true);
+    declare_parameter<double>("camera_level.kp", 1.0);
+    declare_parameter<double>("camera_level.max_tilt_deg", 45.0);
+    get_parameter("camera_level.enabled", camera_level_enabled_);
+    get_parameter("camera_level.kp", camera_level_kp_);
+    get_parameter("camera_level.max_tilt_deg", camera_level_max_tilt_deg_);
+    get_parameter("auto_getup.stand_page", stand_page_);
 
     present_pub_ = create_publisher<op3_football_msgs::msg::JointTickArray>(
       "/op3_football/joint_ticks", 10);
@@ -157,6 +167,7 @@ private:
   void onImu(const sensor_msgs::msg::Imu::SharedPtr msg)
   {
     imu_pub_->publish(*msg);
+    maybeKeepCameraVertical(*msg);
     maybeHandleFallen(*msg);
   }
 
@@ -279,6 +290,25 @@ private:
 
     res->success = true;
     res->message = "module request published: " + req->module_name;
+  }
+
+  void maybeKeepCameraVertical(const sensor_msgs::msg::Imu &imu)
+  {
+    if (!camera_level_enabled_) {
+      return;
+    }
+
+    const double pitch_deg = computePitchDeg(imu);
+    const double desired_tilt_deg = std::clamp(
+      -camera_level_kp_ * pitch_deg,
+      -camera_level_max_tilt_deg_,
+      camera_level_max_tilt_deg_);
+
+    sensor_msgs::msg::JointState head_js;
+    head_js.header.stamp = now();
+    head_js.name.push_back("head_tilt");
+    head_js.position.push_back(desired_tilt_deg * M_PI / 180.0);
+    head_pub_->publish(head_js);
   }
 
   void onWalkingCommand(
@@ -443,13 +473,9 @@ private:
       rclcpp::sleep_for(std::chrono::milliseconds(getup_wait_ms_));
 
       if (auto_getup_stand_after_getup_) {
-        std_msgs::msg::String base_msg;
-        base_msg.data = "base_module";
-        enable_module_pub_->publish(base_msg);
-
-        std_msgs::msg::String pose_msg;
-        pose_msg.data = "ini_pose";
-        ini_pose_pub_->publish(pose_msg);
+        std_msgs::msg::Int32 stand_msg;
+        stand_msg.data = stand_page_;
+        action_page_pub_->publish(stand_msg);
       }
 
       {
@@ -477,6 +503,10 @@ private:
   int getup_front_page_{122};
   int getup_back_page_{123};
   int getup_wait_ms_{4500};
+  bool camera_level_enabled_{true};
+  double camera_level_kp_{1.0};
+  double camera_level_max_tilt_deg_{45.0};
+  int stand_page_{50};
 
   rclcpp::Publisher<op3_football_msgs::msg::JointTickArray>::SharedPtr present_pub_;
   rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_pub_;

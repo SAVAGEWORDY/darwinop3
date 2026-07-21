@@ -6,6 +6,7 @@ MANAGER_LOG="${WS_DIR}/.op3_manager.log"
 BRIDGE_LOG="${WS_DIR}/.op3_bridge.log"
 MANAGER_START_ATTEMPTS="${MANAGER_START_ATTEMPTS:-3}"
 MANAGER_START_WAIT_S="${MANAGER_START_WAIT_S:-6}"
+OP3_STARTUP_HEAD_TILT_DEG="${OP3_STARTUP_HEAD_TILT_DEG:-3.0}"
 
 if [[ ! -d "${WS_DIR}" ]]; then
   echo "Workspace not found: ${WS_DIR}" >&2
@@ -31,6 +32,7 @@ trap cleanup EXIT INT TERM
 cd "${WS_DIR}"
 source /opt/ros/jazzy/setup.bash
 source install/setup.bash
+export OP3_STARTUP_HEAD_TILT_DEG
 
 echo "Authorizing sudo for op3_manager..."
 sudo -v

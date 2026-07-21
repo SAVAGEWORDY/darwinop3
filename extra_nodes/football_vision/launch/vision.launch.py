@@ -1,5 +1,5 @@
 """
-Запуск камеры (usb_cam) + ноды распознавания football_vision.
+Запуск камеры (usb_cam) + ноды распознавания football_vision + HTTP MJPEG стрима.
 
     ros2 launch football_vision vision.launch.py
 
@@ -17,6 +17,9 @@ from ament_index_python.packages import get_package_share_directory
 
 def generate_launch_description():
     with_camera = LaunchConfiguration("with_camera")
+    with_stream = LaunchConfiguration("with_stream")
+    stream_host = LaunchConfiguration("stream_host")
+    stream_port = LaunchConfiguration("stream_port")
     config = os.path.join(
         get_package_share_directory("football_vision"), "config", "vision.yaml")
 
@@ -45,8 +48,25 @@ def generate_launch_description():
         parameters=[config],
     )
 
+    stream = Node(
+        package="football_vision",
+        executable="stream_node",
+        name="football_vision_stream",
+        output="screen",
+        condition=IfCondition(with_stream),
+        parameters=[{
+            "image_topic": "/vision/image_annotated",
+            "host": stream_host,
+            "port": stream_port,
+        }],
+    )
+
     return LaunchDescription([
         DeclareLaunchArgument("with_camera", default_value="true"),
+        DeclareLaunchArgument("with_stream", default_value="true"),
+        DeclareLaunchArgument("stream_host", default_value="0.0.0.0"),
+        DeclareLaunchArgument("stream_port", default_value="8080"),
         usb_cam,
         vision,
+        stream,
     ])

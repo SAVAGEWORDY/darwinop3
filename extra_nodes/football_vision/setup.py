@@ -1,8 +1,21 @@
 import os
+import sys
 from glob import glob
 from setuptools import find_packages, setup
 
 package_name = "football_vision"
+
+# colcon (ament_python) may pass legacy develop flags unsupported by some
+# setuptools versions. Strip them for compatibility.
+for _flag in ("--editable", "--uninstall"):
+    while _flag in sys.argv:
+        sys.argv.remove(_flag)
+
+while "--build-directory" in sys.argv:
+    idx = sys.argv.index("--build-directory")
+    del sys.argv[idx]
+    if idx < len(sys.argv):
+        del sys.argv[idx]
 
 setup(
     name=package_name,
@@ -26,6 +39,7 @@ setup(
     entry_points={
         "console_scripts": [
             "vision_node = football_vision.vision_node:main",
+            "stream_node = football_vision.stream_node:main",
         ],
     },
 )

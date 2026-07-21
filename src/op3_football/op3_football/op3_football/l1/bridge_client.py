@@ -9,7 +9,7 @@ import rclpy
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 from sensor_msgs.msg import Imu
-from std_msgs.msg import String
+from std_msgs.msg import Int32, String
 
 from op3_football_msgs.srv import (
     EmptyTrigger,
@@ -43,6 +43,7 @@ class BridgeClient:
         self._button: str = ''
         self._node.create_subscription(Imu, '/op3_football/imu', self._on_imu, 10)
         self._node.create_subscription(String, '/op3_football/button', self._on_button, 10)
+        self._action_pub = self._node.create_publisher(Int32, '/robotis/action/page_num', 10)
 
         self._cli_write = self._node.create_client(JointWrite, '/op3_football/joint/write')
         self._cli_read = self._node.create_client(JointRead, '/op3_football/joint/read')
@@ -152,6 +153,15 @@ class BridgeClient:
         res = self._call(self._cli_torque, req)
         if not res.success:
             raise RuntimeError(res.message)
+
+    def play_action_page(self, page: int, wait_s: float = 0.0) -> None:
+        self.set_module('action_module')
+        msg = Int32()
+        msg.data = int(page)
+        self._action_pub.publish(msg)
+        if wait_s > 0.0:
+            import time
+            time.sleep(wait_s)
 
     @property
     def imu(self) -> Optional[Imu]:

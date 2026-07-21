@@ -8,7 +8,7 @@ auto_getup:
   # OP3 action pages.
   getup_front_page: 122
   getup_back_page: 123
-  stand_page: 9
+  stand_page: 50
   # Wait for get-up action page to finish.
   getup_wait_s: 4.5
   stand_page_wait_s: 1.2

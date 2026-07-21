@@ -9,3 +9,7 @@ op3_football_bridge:
       getup_front_page: 122
       getup_back_page: 123
       getup_wait_ms: 4500
+    camera_level:
+      enabled: true
+      kp: 1.0
+      max_tilt_deg: 45.0

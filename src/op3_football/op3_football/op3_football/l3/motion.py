@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 import math
+import os
 from pathlib import Path
 import time
 from typing import Optional
@@ -19,6 +20,7 @@ from op3_football.l2.robot import Robot
 from op3_football.l3.coefs import WalkCoefs, presets
 from op3_football.l3.joint_angles import JointAngles
 from op3_football.l3.sense import Sense
+from op3_football.util.units import clamp_tick, degree_to_tick
 
 
 class Motion:
@@ -34,6 +36,9 @@ class Motion:
         self._ramp_steps = 6
         self._ramp_step_deg = 1.5
         self._ramp_modes = {"forward", "forward_fast", "backward", "side_left", "side_right", "spot"}
+        self._turn_knee_back_deg = 0.0
+        # Extra safety head tilt offset for run_op3_shell session.
+        self._startup_head_tilt_deg = float(os.getenv("OP3_STARTUP_HEAD_TILT_DEG", "0.0"))
         # Auto get-up settings (L3-level, from config; defaults match OP3 demo).
         self._auto_getup_enabled = True
         self._auto_getup_stand_after_getup = True
@@ -45,11 +50,12 @@ class Motion:
         self._getup_front_page = 122
         self._getup_back_page = 123
         self._getup_wait_s = 4.5
-        self._stand_page = 9
+        self._stand_page = 50
         self._stand_page_wait_s = 1.2
         self._fall_watch_dt = 0.05
         self._load_auto_getup_config()
         self._action_page_pub = self.robot.bridge._node.create_publisher(Int32, "/robotis/action/page_num", 10)
+        self._apply_startup_head_offset()
 
     def go(self, mode: str = 'forward', duration: Optional[float] = None) -> None:
         """Start prepared walking. Coefficients chosen here, not in L4.
@@ -84,6 +90,8 @@ class Motion:
                 "plus demo_adaptive_turn, demo_ball_follower_turn."
             )
 
+        self._apply_startup_head_offset()
+
         # Connect modules at L3
         self.robot.set_module('walking_module')
         time.sleep(0.05)
@@ -111,7 +119,12 @@ class Motion:
         self.robot.walk.stop()
 
     def stand(self) -> None:
-        self.robot.stand()
+        # Use the same stable action-page stand pose everywhere.
+        self.stop()
+        self.robot.set_module("action_module")
+        self._play_action_page(self._stand_page, self._stand_page_wait_s)
+        self.robot.set_module("walking_module")
+        self._apply_startup_head_offset()
 
     def sit(self) -> None:
         self.robot.sit()
@@ -121,8 +134,6 @@ class Motion:
             self.robot.kick.left()
         else:
             self.robot.kick.right()
-        # return control path to walking-ready posture
-        self.robot.set_module('walking_module')
 
     def estop(self) -> None:
         self.robot.estop()
@@ -249,6 +260,15 @@ class Motion:
         if wait_s > 0.0:
             time.sleep(wait_s)
 
+    def _apply_startup_head_offset(self) -> None:
+        """Apply additional shell-only head tilt offset if configured."""
+        if abs(self._startup_head_tilt_deg) < 1e-6:
+            return
+        try:
+            self.joint.write_deg(20, self._startup_head_tilt_deg)
+        except Exception:
+            pass
+
     def _demo_adaptive_turn(self, duration: float) -> None:
         """In-place adaptive turning from original demo logic (no forward step)."""
         self._run_demo_turn(duration=duration, forward_x=0.0)
@@ -259,16 +279,54 @@ class Motion:
 
     def _demo_turn_left(self, duration: float) -> None:
         """Left turn using the same logic as demo_ball_follower_turn."""
-        self._run_demo_turn(duration=duration, forward_x=-0.003, forced_target_angle=0.3)
+        self._apply_turn_knee_prep(self._turn_knee_back_deg)
+        self._run_demo_turn(
+            duration=duration,
+            forward_x=-0.003,
+            forced_target_angle=0.3,
+            angle_gain=0.20,
+            max_turn_deg=15.0,
+        )
 
     def _demo_turn_right(self, duration: float) -> None:
-        """Right turn using the same logic as demo_ball_follower_turn."""
-        self._run_demo_turn(duration=duration, forward_x=-0.003, forced_target_angle=-0.3)
+        """Right turn mirrored from left turn profile."""
+        self._apply_turn_knee_prep(self._turn_knee_back_deg)
+        self._run_demo_turn(
+            duration=duration,
+            forward_x=-0.003,
+            forced_target_angle=-0.3,
+            angle_gain=0.20,
+            max_turn_deg=15.0,
+        )
 
-    def _run_demo_turn(self, duration: float, forward_x: float, forced_target_angle: Optional[float] = None) -> None:
+    def _apply_turn_knee_prep(self, back_deg: float) -> None:
+        """Nudge knees for turn startup: r_knee back, l_knee back."""
+        try:
+            delta = degree_to_tick(abs(back_deg)) - degree_to_tick(0.0)
+            r_now = self.joint.read(13)
+            l_now = self.joint.read(14)
+            # r_knee bend is toward lower ticks, l_knee bend is toward higher ticks.
+            self.robot.joint.write_many(
+                {
+                    13: clamp_tick(r_now - delta),
+                    14: clamp_tick(l_now + delta),
+                }
+            )
+            time.sleep(0.05)
+        except Exception:
+            pass
+
+    def _run_demo_turn(
+        self,
+        duration: float,
+        forward_x: float,
+        forced_target_angle: Optional[float] = None,
+        angle_gain: float = 0.20,
+        max_turn_deg: float = 15.0,
+    ) -> None:
         # Demo constants from op3_demo ball_follower.
         min_turn = math.radians(5.0)
-        max_turn = math.radians(15.0)
+        max_turn = math.radians(max_turn_deg)
         unit_turn = math.radians(0.5)
         update_hz = 20.0
         dt = 1.0 / update_hz
@@ -302,7 +360,7 @@ class Motion:
 
             rl_angle = 0.0
             if abs(target_angle) > min_turn:
-                rl_goal = min(abs(target_angle) * 0.2, max_turn)
+                rl_goal = min(abs(target_angle) * angle_gain, max_turn)
                 rl_goal = max(rl_goal, min_turn)
                 rl_angle = min(abs(current_r_angle) + unit_turn, rl_goal)
                 if target_angle < 0.0:

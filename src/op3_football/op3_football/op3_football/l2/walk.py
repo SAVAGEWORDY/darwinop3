@@ -42,9 +42,9 @@ class PostureAPI:
         self._joint = joint
 
     def stand(self) -> None:
-        """Init standing pose via base_module."""
+        """Unified stand pose via action page 50."""
         self._bridge.walking_command('stop')
-        self._bridge.ini_pose()
+        self._bridge.play_action_page(50, wait_s=1.2)
 
     def sit(self) -> None:
         """Simple sit trajectory in ticks (placeholder — tune on hardware)."""
