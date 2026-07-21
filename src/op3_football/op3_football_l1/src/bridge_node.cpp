@@ -3,9 +3,13 @@
 #include <mutex>
 #include <string>
 #include <vector>
+#include <atomic>
+#include <cmath>
+#include <thread>
 
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/string.hpp>
+#include <std_msgs/msg/int32.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
 
@@ -38,6 +42,24 @@ public:
   FootballBridge()
   : Node("op3_football_bridge")
   {
+    declare_parameter<bool>("auto_getup.enabled", true);
+    declare_parameter<bool>("auto_getup.stand_after_getup", true);
+    declare_parameter<double>("auto_getup.fall_alpha", 0.4);
+    declare_parameter<double>("auto_getup.fall_forward_limit_deg", 60.0);
+    declare_parameter<double>("auto_getup.fall_back_limit_deg", -60.0);
+    declare_parameter<int>("auto_getup.getup_front_page", 122);
+    declare_parameter<int>("auto_getup.getup_back_page", 123);
+    declare_parameter<int>("auto_getup.getup_wait_ms", 4500);
+
+    get_parameter("auto_getup.enabled", auto_getup_enabled_);
+    get_parameter("auto_getup.stand_after_getup", auto_getup_stand_after_getup_);
+    get_parameter("auto_getup.fall_alpha", fall_alpha_);
+    get_parameter("auto_getup.fall_forward_limit_deg", fall_forward_limit_deg_);
+    get_parameter("auto_getup.fall_back_limit_deg", fall_back_limit_deg_);
+    get_parameter("auto_getup.getup_front_page", getup_front_page_);
+    get_parameter("auto_getup.getup_back_page", getup_back_page_);
+    get_parameter("auto_getup.getup_wait_ms", getup_wait_ms_);
+
     present_pub_ = create_publisher<op3_football_msgs::msg::JointTickArray>(
       "/op3_football/joint_ticks", 10);
     imu_pub_ = create_publisher<sensor_msgs::msg::Imu>("/op3_football/imu", 10);
@@ -51,6 +73,8 @@ public:
       "/robotis/walking/command", 10);
     walking_param_pub_ = create_publisher<op3_walking_module_msgs::msg::WalkingParam>(
       "/robotis/walking/set_params", 10);
+    action_page_pub_ = create_publisher<std_msgs::msg::Int32>(
+      "/robotis/action/page_num", 10);
     ini_pose_pub_ = create_publisher<std_msgs::msg::String>(
       "/robotis/base/ini_pose", 10);
     torque_pub_ = create_publisher<std_msgs::msg::String>(
@@ -133,6 +157,7 @@ private:
   void onImu(const sensor_msgs::msg::Imu::SharedPtr msg)
   {
     imu_pub_->publish(*msg);
+    maybeHandleFallen(*msg);
   }
 
   void onButton(const std_msgs::msg::String::SharedPtr msg)
@@ -268,6 +293,11 @@ private:
     std_msgs::msg::String msg;
     msg.data = req->command;
     walking_cmd_pub_->publish(msg);
+    if (req->command == "start") {
+      walking_active_.store(true);
+    } else if (req->command == "stop") {
+      walking_active_.store(false);
+    }
     res->success = true;
     res->message = "ok";
   }
@@ -306,6 +336,7 @@ private:
     std::shared_ptr<op3_football_msgs::srv::EmptyTrigger::Response> res)
   {
     estop_active_ = true;
+    walking_active_.store(false);
     std_msgs::msg::String stop;
     stop.data = "stop";
     walking_cmd_pub_->publish(stop);
@@ -343,9 +374,109 @@ private:
     res->message = "ok";
   }
 
+  double computePitchDeg(const sensor_msgs::msg::Imu &imu) const
+  {
+    const auto &q = imu.orientation;
+    double sinp = 2.0 * (q.w * q.y - q.z * q.x);
+    if (sinp > 1.0) sinp = 1.0;
+    if (sinp < -1.0) sinp = -1.0;
+    return std::asin(sinp) * 180.0 / M_PI;
+  }
+
+  void maybeHandleFallen(const sensor_msgs::msg::Imu &imu)
+  {
+    if (!auto_getup_enabled_ || estop_active_ || !walking_active_.load() || getup_in_progress_.load()) {
+      return;
+    }
+
+    bool fallen_front = false;
+    bool fallen_back = false;
+    {
+      std::lock_guard<std::mutex> lock(fall_state_mutex_);
+      const double pitch_deg = computePitchDeg(imu);
+      if (!have_filtered_pitch_) {
+        filtered_pitch_deg_ = pitch_deg;
+        have_filtered_pitch_ = true;
+      } else {
+        filtered_pitch_deg_ = filtered_pitch_deg_ * (1.0 - fall_alpha_) + pitch_deg * fall_alpha_;
+      }
+
+      fallen_front = filtered_pitch_deg_ > fall_forward_limit_deg_;
+      fallen_back = filtered_pitch_deg_ < fall_back_limit_deg_;
+    }
+
+    if (!fallen_front && !fallen_back) {
+      return;
+    }
+
+    bool expected = false;
+    if (!getup_in_progress_.compare_exchange_strong(expected, true)) {
+      return;
+    }
+
+    const int page = fallen_front ? getup_front_page_ : getup_back_page_;
+    walking_active_.store(false);
+
+    std::thread([this, page]() {
+      std_msgs::msg::String stop_msg;
+      stop_msg.data = "stop";
+      walking_cmd_pub_->publish(stop_msg);
+
+      std_msgs::msg::String module_msg;
+      module_msg.data = "action_module";
+      enable_module_pub_->publish(module_msg);
+
+      if (set_module_client_->service_is_ready()) {
+        auto request = std::make_shared<robotis_controller_msgs::srv::SetModule::Request>();
+        request->module_name = "action_module";
+        set_module_client_->async_send_request(request);
+      }
+
+      rclcpp::sleep_for(std::chrono::milliseconds(250));
+
+      std_msgs::msg::Int32 page_msg;
+      page_msg.data = page;
+      action_page_pub_->publish(page_msg);
+      RCLCPP_WARN(get_logger(), "Auto get-up triggered. Action page: %d", page);
+
+      // Demo motions need time to complete.
+      rclcpp::sleep_for(std::chrono::milliseconds(getup_wait_ms_));
+
+      if (auto_getup_stand_after_getup_) {
+        std_msgs::msg::String base_msg;
+        base_msg.data = "base_module";
+        enable_module_pub_->publish(base_msg);
+
+        std_msgs::msg::String pose_msg;
+        pose_msg.data = "ini_pose";
+        ini_pose_pub_->publish(pose_msg);
+      }
+
+      {
+        std::lock_guard<std::mutex> lock(fall_state_mutex_);
+        have_filtered_pitch_ = false;
+        filtered_pitch_deg_ = 0.0;
+      }
+      getup_in_progress_.store(false);
+    }).detach();
+  }
+
   std::mutex joint_mutex_;
+  std::mutex fall_state_mutex_;
   std::map<std::string, double> present_rad_;
   bool estop_active_{false};
+  bool auto_getup_enabled_{true};
+  bool auto_getup_stand_after_getup_{true};
+  std::atomic<bool> walking_active_{false};
+  std::atomic<bool> getup_in_progress_{false};
+  bool have_filtered_pitch_{false};
+  double filtered_pitch_deg_{0.0};
+  double fall_alpha_{0.4};
+  double fall_forward_limit_deg_{60.0};
+  double fall_back_limit_deg_{-60.0};
+  int getup_front_page_{122};
+  int getup_back_page_{123};
+  int getup_wait_ms_{4500};
 
   rclcpp::Publisher<op3_football_msgs::msg::JointTickArray>::SharedPtr present_pub_;
   rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_pub_;
@@ -355,6 +486,7 @@ private:
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr enable_module_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr walking_cmd_pub_;
   rclcpp::Publisher<op3_walking_module_msgs::msg::WalkingParam>::SharedPtr walking_param_pub_;
+  rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr action_page_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr ini_pose_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr torque_pub_;
   rclcpp::Publisher<robotis_controller_msgs::msg::SyncWriteItem>::SharedPtr sync_write_pub_;

@@ -1,0 +1,11 @@
+op3_football_bridge:
+  ros__parameters:
+    auto_getup:
+      enabled: false
+      stand_after_getup: true
+      fall_alpha: 0.4
+      fall_forward_limit_deg: 60.0
+      fall_back_limit_deg: -60.0
+      getup_front_page: 122
+      getup_back_page: 123
+      getup_wait_ms: 4500

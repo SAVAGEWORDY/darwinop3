@@ -90,13 +90,13 @@ def presets() -> Dict[str, WalkCoefs]:
     # - longer double support phase,
     # - smaller yaw amplitude,
     # - slightly lower CoM/step dynamics.
-    pivot_left = base.with_step(x=0.0, y=0.0, angle=0.13)
+    pivot_left = base.with_step(x=0.0, y=0.0, angle=-0.13)
     pivot_left.period_time = 0.72
     pivot_left.dsp_ratio = 0.28
     pivot_left.y_swap_amplitude = 0.022
     pivot_left.z_move_amplitude = 0.050
 
-    pivot_right = base.with_step(x=0.0, y=0.0, angle=-0.13)
+    pivot_right = base.with_step(x=0.0, y=0.0, angle=0.13)
     pivot_right.period_time = 0.72
     pivot_right.dsp_ratio = 0.28
     pivot_right.y_swap_amplitude = 0.022
@@ -107,10 +107,10 @@ def presets() -> Dict[str, WalkCoefs]:
         'forward': walk_base.with_step(x=0.020, y=0.0, angle=0.0),
         'forward_fast': walk_base.with_step(x=0.030, y=0.0, angle=0.0),
         'backward': walk_base.with_step(x=-0.015, y=0.0, angle=0.0),
-        'side_left': walk_base.with_step(x=0.0, y=0.020, angle=0.0),
-        'side_right': walk_base.with_step(x=0.0, y=-0.020, angle=0.0),
-        'turn_left': base.with_step(x=0.005, y=0.0, angle=0.15),
-        'turn_right': base.with_step(x=0.005, y=0.0, angle=-0.15),
+        'side_left': walk_base.with_step(x=0.0, y=-0.020, angle=0.0),
+        'side_right': walk_base.with_step(x=0.0, y=0.020, angle=0.0),
+        'turn_left': base.with_step(x=0.005, y=0.0, angle=-0.15),
+        'turn_right': base.with_step(x=0.005, y=0.0, angle=0.15),
         'pivot_left': pivot_left,
         'pivot_right': pivot_right,
         'spot': walk_base.with_step(x=-0.003, y=0.0, angle=0.0),  # in-place like demo
