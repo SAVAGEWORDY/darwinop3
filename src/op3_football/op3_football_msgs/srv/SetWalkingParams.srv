@@ -1,0 +1,4 @@
+op3_walking_module_msgs/WalkingParam params
+---
+bool success
+string message

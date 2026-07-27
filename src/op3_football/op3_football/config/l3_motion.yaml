@@ -1,0 +1,16 @@
+auto_getup:
+  enabled: true
+  stand_after_getup: true
+  # Same thresholds as OP3 demo.
+  fall_forward_limit_deg: 60.0
+  fall_back_limit_deg: -60.0
+  fall_alpha: 0.4
+  # OP3 action pages.
+  getup_front_page: 122
+  getup_back_page: 123
+  stand_page: 50
+  # Wait for get-up action page to finish.
+  getup_wait_s: 4.5
+  stand_page_wait_s: 1.2
+  # IMU check interval while motion is executing.
+  watch_dt_s: 0.05

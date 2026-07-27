@@ -1,0 +1,13 @@
+/football_vision:
+  ros__parameters:
+    # Путь до весов. Пусто -> берётся models/best.pt из share пакета.
+    # Для OpenVINO укажи путь до экспортированной папки, напр.:
+    #   model_path: "/home/robotis/models/best_openvino_model"
+    model_path: ""
+    image_topic: "/usb_cam_node/image_raw"
+    use_compressed: false
+    conf: 0.25
+    imgsz: 480          # 736 = как обучалось (точнее), 320 = быстрее
+    device: "cpu"
+    publish_annotated: true
+    log_every_sec: 5.0
